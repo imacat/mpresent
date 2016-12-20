@@ -1,0 +1,270 @@
+#! /opt/openoffice4/program/python
+# -*- coding: utf-8 -*-
+# OpenOffice mobile presentation constroller, as Python
+#   by imacat <imacat@mail.imacat.idv.tw>, 2014-02-28
+
+# Python imports
+import os
+import os.path
+import sys
+import ssl
+import time
+import random
+import BaseHTTPServer
+
+
+def append_uno_path():
+    """ Appends the path of the uno module to the import path.  """
+
+    is_found_uno = False
+    for p in sys.path:
+        if os.path.exists(os.path.join(p, "uno.py")):
+            return
+    # For uno.py on MacOS
+    cand = "/Applications/OpenOffice.app/Contents/MacOS"
+    if os.path.exists(os.path.join(cand, "uno.py")):
+        sys.path.append(cand)
+        return
+    # Finds uno.py for MS-Windows
+    cand = sys.executable
+    while cand != os.path.dirname(cand):
+        cand = os.path.dirname(cand)
+        if os.path.exists(os.path.join(cand, "uno.py")):
+            sys.path.append(cand)
+            return
+
+append_uno_path()
+import uno
+from com.sun.star.beans import PropertyValue
+from com.sun.star.lang import DisposedException
+from com.sun.star.connection import NoConnectException
+
+
+class PresentationController:
+    """The OpenOffice mobile presentation controller."""
+
+    def __init__(self, docfile):
+        """Initializes the object."""
+        self.file = docfile
+        self.bootstrap_context = None
+        self.service_manager = None
+        self.desktop = None
+        self.doc = None
+
+    def check_valid(self):
+        """Check the validity of the connection and the opened document."""
+        try:
+            presentation = self.doc.getPresentation()
+        except (AttributeError, DisposedException):
+            try:
+                self.bootstrap_context.getServiceManager()
+            except (AttributeError, DisposedException):
+                self.connect()
+            self.open()
+            presentation = self.doc.getPresentation()
+        if not presentation.isRunning():
+            presentation.start()
+
+    def connect(self):
+        """Connects to the running OpenOffice process."""
+        # Obtains the local context
+        local_context = uno.getComponentContext()
+        # Obtains the local service manager
+        local_service_manager = local_context.getServiceManager()
+        # Obtains the URL resolver
+        url_resolver = local_service_manager.createInstanceWithContext(
+            "com.sun.star.bridge.UnoUrlResolver", local_context)
+        # Obtains the context
+        url = ("uno:socket,host=localhost,port=2002;"
+               "urp;StarOffice.ComponentContext")
+        try:
+            self.bootstrap_context = url_resolver.resolve(url)
+        except NoConnectException:
+            self.start_oo()
+            self.bootstrap_context = url_resolver.resolve(url)
+        # Obtains the service manager
+        self.service_manager = self.bootstrap_context.getServiceManager()
+        # Obtains the desktop service
+        self.desktop = self.service_manager.createInstanceWithContext(
+            "com.sun.star.frame.Desktop", self.bootstrap_context)
+
+    def start_oo(self):
+        """Starts the OpenOffice in server listening mode"""
+        # For MS-Windows, which does not have fork()
+        if os.name == "nt":
+            from subprocess import Popen
+            ooexec = os.path.join(os.path.dirname(uno.__file__), "soffice.exe")
+            DETACHED_PROCESS = 0x00000008
+            Popen([ooexec, "-accept=socket,host=localhost,port=2002;urp;"],
+                  close_fds=True, creationflags=DETACHED_PROCESS)
+            time.sleep(2)
+            return
+
+        # For POSIX systems, including Linux
+        try:
+            pid = os.fork()
+        except OSError:
+            sys.stderr.write("failed to fork().\n")
+            sys.exit(1)
+        if pid != 0:
+            time.sleep(2)
+            return
+        os.setsid()
+        ooexec = os.path.join(os.path.dirname(uno.__file__), "soffice.bin")
+        try:
+            os.execl(
+                ooexec, ooexec,
+                "-accept=socket,host=localhost,port=2002;urp;")
+        except OSError:
+            sys.stderr.write(
+                ooexec + ": Failed to run the OpenOffice server.\n")
+            sys.exit(1)
+
+    def open(self):
+        """Opens an office document."""
+        file_content_provider = self.service_manager.createInstance(
+            "com.sun.star.ucb.FileContentProvider")
+        url = file_content_provider.getFileURLFromSystemPath("", self.file)
+        enum = self.desktop.getComponents().createEnumeration()
+        while enum.hasMoreElements():
+            component = enum.nextElement()
+            if component.supportsService(
+                    "com.sun.star.presentation.PresentationDocument"):
+                if component.getURL() == url:
+                    self.doc = component
+                    return
+        prop1 = PropertyValue()
+        prop1.Name = "ReadOnly"
+        prop1.Value = True
+        prop2 = PropertyValue()
+        prop2.Name = "MacroExecutionMode"
+        # com.sun.star.document.MacroExecMode.ALWAYS_EXECUTE
+        prop2.Value = 2
+        self.doc = self.desktop.loadComponentFromURL(
+            url, "_default", 0, (prop2,))
+        if not self.doc.supportsService(
+                "com.sun.star.presentation.PresentationDocument"):
+            sys.stderr.write(self.file + ": not a presentation document.\n")
+            sys.exit(1)
+        return
+
+    def goto_next_slide(self):
+        """Goes to the next slide."""
+        self.doc.getPresentation().getController().gotoNextSlide()
+        return
+
+    def goto_prev_slide(self):
+        """Goes to the previous slide."""
+        self.doc.getPresentation().getController().gotoPreviousSlide()
+        return
+
+
+class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    """The local HTTP request handler."""
+    def do_GET(self):
+        """Handles the GET requests."""
+        oo.check_valid()
+        html = """<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
+    "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.5" />
+<style type="text/css">
+.pocket input {
+    font-size: 8em;
+}
+</style>
+<title>OpenOffice Presentation Controller</title>
+</head>
+<body>
+
+<div class="pocket">
+<form action="/next" method="POST">
+<input type="submit" value="▲" />
+</form>
+</div>
+
+<div class="pocket">
+<form action="/prev" method="POST">
+<input type="submit" value="▼" />
+</form>
+</div>
+
+</body>"""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=UTF-8")
+        self.send_header("Content-Length", len(html))
+        self.end_headers()
+        self.wfile.write(html)
+
+    def do_POST(self):
+        """Handles the POST requests."""
+        oo.check_valid()
+        if self.path == "/next":
+            oo.goto_next_slide()
+        elif self.path == "/prev":
+            oo.goto_prev_slide()
+        html = """<?xml version="1.0" encoding="US-ASCII" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
+    "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=US-ASCII" />
+<meta name="viewport" content="width=device-width, initial-scale=1.5" />
+<title>303 See Others</title>
+</head>
+<body>
+<h1>303 See Others</h1>
+<p>Please follow <a href="/">this location</a>.</p>
+</body>
+</html>"""
+        self.send_response(303)
+        self.send_header("Location", "/")
+        self.send_header("Content-Type", "text/html; charset=US-ASCII")
+        self.send_header("Content-Length", len(html))
+        self.end_headers()
+        self.wfile.write(html)
+
+
+def run():
+    """Runs the local HTTP server and starts the presentation."""
+    oo.check_valid()
+    server_address = ("", 53177)
+    httpd = BaseHTTPServer.HTTPServer(server_address, MyHTTPRequestHandler)
+    # TODO: Changed to an option or find the certificates automatically
+    if usessl is not False:
+        httpd.socket = ssl.wrap_socket(
+            httpd.socket,
+            keyfile=usessl[0],
+            certfile=usessl[1],
+            server_side=True)
+    httpd.serve_forever()
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        sys.stderr.write("Please specify the presentation document.\n")
+        sys.exit(1)
+    docfile = os.path.abspath(sys.argv[1])
+    s = docfile.lower()
+    if not (s.endswith(".odp")
+            or s.endswith(".sxi")
+            or s.endswith(".ppt")
+            or s.endswith(".pptx")):
+        sys.stderr.write(docfile + ": not a presentation document.\n")
+        sys.exit(1)
+    if not os.path.exists(docfile):
+        sys.stderr.write(docfile + ": file does not exist.\n")
+        sys.exit(1)
+    if not os.path.isfile(docfile):
+        sys.stderr.write(docfile + ": file does not exist.\n")
+        sys.exit(1)
+    mydir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    keyfile = os.path.join(mydir, "server.key.pem")
+    crtfile = os.path.join(mydir, "server.crt.pem")
+    usessl = False
+    if os.path.isfile(keyfile) and os.path.isfile(crtfile):
+        usessl = (keyfile, crtfile)
+    oo = PresentationController(docfile)
+    run()
