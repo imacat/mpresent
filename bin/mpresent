@@ -3,18 +3,38 @@
 # OpenOffice mobile presentation constroller, as Python
 #   by imacat <imacat@mail.imacat.idv.tw>, 2014-02-28
 
-# Python imports
+#  Copyright (c) 2016 imacat.
+#
+#  Licensed under the Apache License, Version 2.0 (the "License");
+#  you may not use this file except in compliance with the License.
+#  You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+#  Unless required by applicable law or agreed to in writing, software
+#  distributed under the License is distributed on an "AS IS" BASIS,
+#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#  See the License for the specific language governing permissions and
+#  limitations under the License.
+
+"""Controls OpenOffice presentation with mobile devices.
+
+"""
+
+from __future__ import print_function
+import argparse
 import os
 import os.path
 import sys
 import ssl
 import time
 import random
+import socket
 import BaseHTTPServer
 
 
 def append_uno_path():
-    """ Appends the path of the uno module to the import path.  """
+    """Append the path of the uno module to the import path."""
 
     is_found_uno = False
     for p in sys.path:
@@ -40,19 +60,117 @@ from com.sun.star.lang import DisposedException
 from com.sun.star.connection import NoConnectException
 
 
+def main():
+    """The main program."""
+    t_start = time.time()
+    global args
+
+    # Parses the arguments
+    parse_args()
+
+    run(args.docfile, args.wwwport, args.usessl)
+
+
+def parse_args():
+    """Parse the arguments."""
+    global args
+
+    parser = argparse.ArgumentParser(
+        description=("Synchronize the local Basic scripts"
+                     " with OpenOffice/LibreOffice Basic."))
+    parser.add_argument(
+        "docfile", metavar="PRESENTATIOON", type=presentation_doc,
+        help=("The presentation document to play."))
+    parser.add_argument(
+        "-w", "--wwwport", metavar="N", type=int, default=53177,
+        help=("The TCP port for the web presentation controller "
+              "(default: %(default)s)"))
+    parser.add_argument(
+        "-p", "--port", metavar="N", type=int, default=2002,
+        help=("The TCP port to communicate with "
+              "OpenOffice/LibreOffice with (default: %(default)s)"))
+    parser.add_argument(
+        "-v", "--version", action="version", version="%(prog)s 1.0")
+    args = parser.parse_args()
+
+    # Obtain the absolute path
+    args.docfile = os.path.abspath(args.docfile)
+
+    # Check whether we are using SSL.
+    # TODO: Changed to an option or find the certificates automatically
+    docdir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    keyfile = os.path.join(docdir, "server.key.pem")
+    crtfile = os.path.join(docdir, "server.crt.pem")
+    args.usessl = False
+    if os.path.isfile(keyfile) and os.path.isfile(crtfile):
+        args.usessl = (keyfile, crtfile)
+
+    return
+
+
+def presentation_doc(docfile):
+    """Checks the supplied presentation document argument.
+
+    Arguments:
+        docfile: The supplied presentation document argument.
+
+    Returns:
+        The supplied presentation document argument.
+    """
+    s = docfile.lower()
+    if not (s.endswith(".odp")
+            or s.endswith(".sxi")
+            or s.endswith(".ppt")
+            or s.endswith(".pptx")):
+        raise argparse.ArgumentTypeError(
+            "%s: Not a presentation document" % docfile)
+    path = os.path.abspath(docfile)
+    if not os.path.exists(path):
+        raise argparse.ArgumentTypeError(
+            "%s: File does not exit" % docfile)
+    if not os.path.isfile(path):
+        raise argparse.ArgumentTypeError(
+            "%s: Not a file" % docfile)
+    return docfile
+
+
+def run(doc, port, usessl):
+    """
+    Start the presentation and run the web presentation controller.
+    """
+    global oo
+
+    print("Listen on port %d" % port)
+    oo = PresentationController(doc)
+    oo.check_valid()
+    server_address = ("", port)
+    httpd = BaseHTTPServer.HTTPServer(server_address, MyHTTPRequestHandler)
+    if usessl is not False:
+        httpd.socket = ssl.wrap_socket(
+            httpd.socket,
+            keyfile=usessl[0],
+            certfile=usessl[1],
+            server_side=True)
+    httpd.serve_forever()
+
+
 class PresentationController:
     """The OpenOffice mobile presentation controller."""
 
     def __init__(self, docfile):
-        """Initializes the object."""
+        """Initialize the object."""
         self.file = docfile
+        self.port = 2002
         self.bootstrap_context = None
         self.service_manager = None
         self.desktop = None
         self.doc = None
 
     def check_valid(self):
-        """Check the validity of the connection and the opened document."""
+        """
+        Check the validity of the connection and the opened
+        document.
+        """
         try:
             presentation = self.doc.getPresentation()
         except (AttributeError, DisposedException):
@@ -66,7 +184,11 @@ class PresentationController:
             presentation.start()
 
     def connect(self):
-        """Connects to the running OpenOffice process."""
+        """Connect to the running OpenOffice/LibreOffice process.
+
+        Run OpenOffice/LibreOffice in server listening mode if it is
+        not running yet.
+        """
         # Obtains the local context
         local_context = uno.getComponentContext()
         # Obtains the local service manager
@@ -75,53 +197,119 @@ class PresentationController:
         url_resolver = local_service_manager.createInstanceWithContext(
             "com.sun.star.bridge.UnoUrlResolver", local_context)
         # Obtains the context
-        url = ("uno:socket,host=localhost,port=2002;"
-               "urp;StarOffice.ComponentContext")
-        try:
-            self.bootstrap_context = url_resolver.resolve(url)
-        except NoConnectException:
-            self.start_oo()
-            self.bootstrap_context = url_resolver.resolve(url)
+        url = ("uno:socket,host=localhost,port=%d;"
+               "urp;StarOffice.ComponentContext") % self.port
+        while True:
+            try:
+                self.bootstrap_context = url_resolver.resolve(url)
+            except NoConnectException:
+                self.__start_oo()
+            else:
+                break
         # Obtains the service manager
         self.service_manager = self.bootstrap_context.getServiceManager()
         # Obtains the desktop service
         self.desktop = self.service_manager.createInstanceWithContext(
             "com.sun.star.frame.Desktop", self.bootstrap_context)
 
-    def start_oo(self):
-        """Starts the OpenOffice in server listening mode"""
+    def __start_oo(self):
+        """Start OpenOffice/LibreOffice in server listening mode."""
         # For MS-Windows, which does not have fork()
         if os.name == "nt":
             from subprocess import Popen
-            ooexec = os.path.join(os.path.dirname(uno.__file__), "soffice.exe")
+            soffice = os.path.join(
+                os.path.dirname(uno.__file__), "soffice.exe")
             DETACHED_PROCESS = 0x00000008
-            Popen([ooexec, "-accept=socket,host=localhost,port=2002;urp;"],
+            Popen([soffice,
+                   "-accept=socket,host=localhost,port=%d;urp;" %
+                   self.port],
                   close_fds=True, creationflags=DETACHED_PROCESS)
             time.sleep(2)
             return
 
-        # For POSIX systems, including Linux
+        # For POSIX systems, including Linux and MacOSX
         try:
             pid = os.fork()
         except OSError:
-            sys.stderr.write("failed to fork().\n")
+            print("Failed to fork().", file=sys.stderr)
             sys.exit(1)
         if pid != 0:
             time.sleep(2)
             return
         os.setsid()
-        ooexec = os.path.join(os.path.dirname(uno.__file__), "soffice.bin")
+        soffice = self.__find_posix_soffice()
+        if soffice is None:
+            print("Failed to find the "
+                  "OpenOffice/LibreOffice installation.",
+                  file=sys.stderr)
+            sys.exit(1)
+        param = "-accept=socket,host=localhost,port=%d;urp;" % \
+            self.port
+        # LibreOffice on POSIX systems uses --accept instead of
+        # -accept now.
+        if self.__is_soffice_lo(soffice):
+            param = "-" + param
         try:
-            os.execl(
-                ooexec, ooexec,
-                "-accept=socket,host=localhost,port=2002;urp;")
+            os.execl(soffice, soffice, param)
         except OSError:
-            sys.stderr.write(
-                ooexec + ": Failed to run the OpenOffice server.\n")
+            print("%s: Failed to run the"
+                  " OpenOffice/LibreOffice server." % soffice,
+                  file=sys.stderr)
             sys.exit(1)
 
+    def __find_posix_soffice(self):
+        """Find soffice on POSIX systems (Linux or MacOSX).
+
+        Returns:
+            The found soffice executable, or None if not found.
+        """
+        # Checkes soffice in the same directory of uno.py
+        # This works for Linux OpenOffice/LibreOffice local
+        # installation, and OpenOffice on MacOSX.
+        soffice = os.path.join(
+            os.path.dirname(uno.__file__), "soffice")
+        if os.path.exists(soffice):
+            return soffice
+
+        # Now we have LibreOffice on MacOSX and Linux
+        # OpenOffice/LibreOffice vender installation.
+
+        # LibreOffice on MacOSX.
+        soffice = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
+        if os.path.exists(soffice):
+            return soffice
+
+        # Linux OpenOffice/LibreOffice vender installation.
+        soffice = "/usr/bin/soffice"
+        if os.path.exists(soffice):
+            return soffice
+
+        # Not found
+        return None
+
+    def __is_soffice_lo(self, soffice):
+        """Check whether the soffice executable is LibreOffice.
+
+        LibreOffice on POSIX systems accepts "--accept" instead of
+        "-accept" now.
+
+        Returns:
+            True if soffice is LibreOffice, or False otherwise.
+        """
+        # This works for most cases.
+        if soffice.lower().find("libreoffice") != -1:
+            return True
+
+        # Checks the symbolic link at /usr/bin/soffice
+        if soffice == "/usr/bin/soffice" and os.path.islink(soffice):
+            if os.readlink(soffice).lower().find("libreoffice") != -1:
+                return True
+
+        # Not found
+        return False
+
     def open(self):
-        """Opens an office document."""
+        """Open an office document."""
         file_content_provider = self.service_manager.createInstance(
             "com.sun.star.ucb.FileContentProvider")
         url = file_content_provider.getFileURLFromSystemPath("", self.file)
@@ -149,20 +337,21 @@ class PresentationController:
         return
 
     def goto_next_slide(self):
-        """Goes to the next slide."""
+        """Go to the next slide."""
         self.doc.getPresentation().getController().gotoNextSlide()
         return
 
     def goto_prev_slide(self):
-        """Goes to the previous slide."""
+        """Go to the previous slide."""
         self.doc.getPresentation().getController().gotoPreviousSlide()
         return
 
 
 class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     """The local HTTP request handler."""
+
     def do_GET(self):
-        """Handles the GET requests."""
+        """Handle the GET requests."""
         oo.check_valid()
         html = """<?xml version="1.0" encoding="UTF-8" ?>
 <!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN"
@@ -200,7 +389,7 @@ class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.wfile.write(html)
 
     def do_POST(self):
-        """Handles the POST requests."""
+        """Handle the POST requests."""
         oo.check_valid()
         if self.path == "/next":
             oo.goto_next_slide()
@@ -228,21 +417,9 @@ class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         self.wfile.write(html)
 
 
-def run():
-    """Runs the local HTTP server and starts the presentation."""
-    oo.check_valid()
-    server_address = ("", 53177)
-    httpd = BaseHTTPServer.HTTPServer(server_address, MyHTTPRequestHandler)
-    # TODO: Changed to an option or find the certificates automatically
-    if usessl is not False:
-        httpd.socket = ssl.wrap_socket(
-            httpd.socket,
-            keyfile=usessl[0],
-            certfile=usessl[1],
-            server_side=True)
-    httpd.serve_forever()
-
 if __name__ == "__main__":
+    main()
+    """
     if len(sys.argv) != 2:
         sys.stderr.write("Please specify the presentation document.\n")
         sys.exit(1)
@@ -268,3 +445,4 @@ if __name__ == "__main__":
         usessl = (keyfile, crtfile)
     oo = PresentationController(docfile)
     run()
+    """
