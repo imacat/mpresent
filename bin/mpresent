@@ -177,40 +177,11 @@ class PresentationController:
             try:
                 self.bootstrap_context.getServiceManager()
             except (AttributeError, DisposedException):
-                self.connect()
+                self.__connect()
             self.open()
             presentation = self.doc.getPresentation()
         if not presentation.isRunning():
             presentation.start()
-
-    def connect(self):
-        """Connect to the running OpenOffice/LibreOffice process.
-
-        Run OpenOffice/LibreOffice in server listening mode if it is
-        not running yet.
-        """
-        # Obtains the local context
-        local_context = uno.getComponentContext()
-        # Obtains the local service manager
-        local_service_manager = local_context.getServiceManager()
-        # Obtains the URL resolver
-        url_resolver = local_service_manager.createInstanceWithContext(
-            "com.sun.star.bridge.UnoUrlResolver", local_context)
-        # Obtains the context
-        url = ("uno:socket,host=localhost,port=%d;"
-               "urp;StarOffice.ComponentContext") % self.port
-        while True:
-            try:
-                self.bootstrap_context = url_resolver.resolve(url)
-            except NoConnectException:
-                self.__start_oo()
-            else:
-                break
-        # Obtains the service manager
-        self.service_manager = self.bootstrap_context.getServiceManager()
-        # Obtains the desktop service
-        self.desktop = self.service_manager.createInstanceWithContext(
-            "com.sun.star.frame.Desktop", self.bootstrap_context)
 
     def open(self):
         """Open an office document."""
@@ -249,6 +220,35 @@ class PresentationController:
         """Go to the previous slide."""
         self.doc.getPresentation().getController().gotoPreviousSlide()
         return
+
+    def __connect(self):
+        """Connect to the running OpenOffice/LibreOffice process.
+
+        Run OpenOffice/LibreOffice in server listening mode if it is
+        not running yet.
+        """
+        # Obtains the local context
+        local_context = uno.getComponentContext()
+        # Obtains the local service manager
+        local_service_manager = local_context.getServiceManager()
+        # Obtains the URL resolver
+        url_resolver = local_service_manager.createInstanceWithContext(
+            "com.sun.star.bridge.UnoUrlResolver", local_context)
+        # Obtains the context
+        url = ("uno:socket,host=localhost,port=%d;"
+               "urp;StarOffice.ComponentContext") % self.port
+        while True:
+            try:
+                self.bootstrap_context = url_resolver.resolve(url)
+            except NoConnectException:
+                self.__start_oo()
+            else:
+                break
+        # Obtains the service manager
+        self.service_manager = self.bootstrap_context.getServiceManager()
+        # Obtains the desktop service
+        self.desktop = self.service_manager.createInstanceWithContext(
+            "com.sun.star.frame.Desktop", self.bootstrap_context)
 
     def __start_oo(self):
         """Start OpenOffice/LibreOffice in server listening mode."""
