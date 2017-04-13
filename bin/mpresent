@@ -212,6 +212,44 @@ class PresentationController:
         self.desktop = self.service_manager.createInstanceWithContext(
             "com.sun.star.frame.Desktop", self.bootstrap_context)
 
+    def open(self):
+        """Open an office document."""
+        file_content_provider = self.service_manager.createInstance(
+            "com.sun.star.ucb.FileContentProvider")
+        url = file_content_provider.getFileURLFromSystemPath("", self.file)
+        enum = self.desktop.getComponents().createEnumeration()
+        while enum.hasMoreElements():
+            component = enum.nextElement()
+            if component.supportsService(
+                    "com.sun.star.presentation.PresentationDocument"):
+                if component.getURL() == url:
+                    self.doc = component
+                    return
+        prop1 = PropertyValue()
+        prop1.Name = "ReadOnly"
+        prop1.Value = True
+        prop2 = PropertyValue()
+        prop2.Name = "MacroExecutionMode"
+        # com.sun.star.document.MacroExecMode.ALWAYS_EXECUTE
+        prop2.Value = 2
+        self.doc = self.desktop.loadComponentFromURL(
+            url, "_default", 0, (prop2,))
+        if not self.doc.supportsService(
+                "com.sun.star.presentation.PresentationDocument"):
+            sys.stderr.write(self.file + ": not a presentation document.\n")
+            sys.exit(1)
+        return
+
+    def goto_next_slide(self):
+        """Go to the next slide."""
+        self.doc.getPresentation().getController().gotoNextSlide()
+        return
+
+    def goto_prev_slide(self):
+        """Go to the previous slide."""
+        self.doc.getPresentation().getController().gotoPreviousSlide()
+        return
+
     def __start_oo(self):
         """Start OpenOffice/LibreOffice in server listening mode."""
         # For MS-Windows, which does not have fork()
@@ -307,44 +345,6 @@ class PresentationController:
 
         # Not found
         return False
-
-    def open(self):
-        """Open an office document."""
-        file_content_provider = self.service_manager.createInstance(
-            "com.sun.star.ucb.FileContentProvider")
-        url = file_content_provider.getFileURLFromSystemPath("", self.file)
-        enum = self.desktop.getComponents().createEnumeration()
-        while enum.hasMoreElements():
-            component = enum.nextElement()
-            if component.supportsService(
-                    "com.sun.star.presentation.PresentationDocument"):
-                if component.getURL() == url:
-                    self.doc = component
-                    return
-        prop1 = PropertyValue()
-        prop1.Name = "ReadOnly"
-        prop1.Value = True
-        prop2 = PropertyValue()
-        prop2.Name = "MacroExecutionMode"
-        # com.sun.star.document.MacroExecMode.ALWAYS_EXECUTE
-        prop2.Value = 2
-        self.doc = self.desktop.loadComponentFromURL(
-            url, "_default", 0, (prop2,))
-        if not self.doc.supportsService(
-                "com.sun.star.presentation.PresentationDocument"):
-            sys.stderr.write(self.file + ": not a presentation document.\n")
-            sys.exit(1)
-        return
-
-    def goto_next_slide(self):
-        """Go to the next slide."""
-        self.doc.getPresentation().getController().gotoNextSlide()
-        return
-
-    def goto_prev_slide(self):
-        """Go to the previous slide."""
-        self.doc.getPresentation().getController().gotoPreviousSlide()
-        return
 
 
 class MyHTTPRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
