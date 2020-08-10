@@ -1,6 +1,6 @@
 #! /opt/openoffice4/program/python
 # -*- coding: utf-8 -*-
-# OpenOffice mobile presentation constroller, as Python
+# OpenOffice mobile presentation controller, as Python
 #   by imacat <imacat@mail.imacat.idv.tw>, 2014-02-28
 
 #  Copyright (c) 2016 imacat.
@@ -22,36 +22,35 @@
 """
 
 from __future__ import print_function
+
+import BaseHTTPServer
 import argparse
 import os
 import os.path
-import sys
 import ssl
+import sys
 import time
-import random
-import socket
-import BaseHTTPServer
 
 
 def append_uno_path():
     """Append the path of the uno module to the import path."""
 
-    is_found_uno = False
     for p in sys.path:
         if os.path.exists(os.path.join(p, "uno.py")):
             return
     # For uno.py on MacOS
-    cand = "/Applications/OpenOffice.app/Contents/MacOS"
-    if os.path.exists(os.path.join(cand, "uno.py")):
-        sys.path.append(cand)
+    candidate = "/Applications/OpenOffice.app/Contents/MacOS"
+    if os.path.exists(os.path.join(candidate, "uno.py")):
+        sys.path.append(candidate)
         return
     # Find uno.py for MS-Windows
-    cand = sys.executable
-    while cand != os.path.dirname(cand):
-        cand = os.path.dirname(cand)
-        if os.path.exists(os.path.join(cand, "uno.py")):
-            sys.path.append(cand)
+    candidate = sys.executable
+    while candidate != os.path.dirname(candidate):
+        candidate = os.path.dirname(candidate)
+        if os.path.exists(os.path.join(candidate, "uno.py")):
+            sys.path.append(candidate)
             return
+
 
 append_uno_path()
 import uno
@@ -62,13 +61,12 @@ from com.sun.star.connection import NoConnectException
 
 def main():
     """The main program."""
-    t_start = time.time()
     global args
 
     # Parses the arguments
     parse_args()
 
-    run(args.docfile, args.wwwport, args.usessl)
+    run(args.doc_file, args.www_port, args.use_ssl)
 
 
 def parse_args():
@@ -79,10 +77,10 @@ def parse_args():
         description=("Synchronize the local Basic scripts"
                      " with OpenOffice/LibreOffice Basic."))
     parser.add_argument(
-        "docfile", metavar="PRESENTATIOON", type=presentation_doc,
-        help=("The presentation document to play."))
+        "doc_file", metavar="PRESENTATION", type=presentation_doc,
+        help="The presentation document to play.")
     parser.add_argument(
-        "-w", "--wwwport", metavar="N", type=int, default=53177,
+        "-w", "--www-port", metavar="N", type=int, default=53177,
         help=("The TCP port for the web presentation controller "
               "(default: %(default)s)"))
     parser.add_argument(
@@ -94,47 +92,47 @@ def parse_args():
     args = parser.parse_args()
 
     # Obtain the absolute path
-    args.docfile = os.path.abspath(args.docfile)
+    args.doc_file = os.path.abspath(args.doc_file)
 
     # Check whether we are using SSL.
     # TODO: Changed to an option or find the certificates automatically
-    docdir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    keyfile = os.path.join(docdir, "server.key.pem")
-    crtfile = os.path.join(docdir, "server.crt.pem")
-    args.usessl = False
-    if os.path.isfile(keyfile) and os.path.isfile(crtfile):
-        args.usessl = (keyfile, crtfile)
+    doc_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    key_file = os.path.join(doc_dir, "server.key.pem")
+    crt_file = os.path.join(doc_dir, "server.crt.pem")
+    args.use_ssl = False
+    if os.path.isfile(key_file) and os.path.isfile(crt_file):
+        args.use_ssl = (key_file, crt_file)
 
     return
 
 
-def presentation_doc(docfile):
+def presentation_doc(doc_file):
     """Check the supplied presentation document argument.
 
     Arguments:
-        docfile: The supplied presentation document argument.
+        doc_file: The supplied presentation document argument.
 
     Returns:
         The supplied presentation document argument.
     """
-    s = docfile.lower()
+    s = doc_file.lower()
     if not (s.endswith(".odp")
             or s.endswith(".sxi")
             or s.endswith(".ppt")
             or s.endswith(".pptx")):
         raise argparse.ArgumentTypeError(
-            "%s: Not a presentation document" % docfile)
-    path = os.path.abspath(docfile)
+            "%s: Not a presentation document" % doc_file)
+    path = os.path.abspath(doc_file)
     if not os.path.exists(path):
         raise argparse.ArgumentTypeError(
-            "%s: File does not exit" % docfile)
+            "%s: File does not exit" % doc_file)
     if not os.path.isfile(path):
         raise argparse.ArgumentTypeError(
-            "%s: Not a file" % docfile)
-    return docfile
+            "%s: Not a file" % doc_file)
+    return doc_file
 
 
-def run(doc, port, usessl):
+def run(doc, port, use_ssl):
     """
     Start the presentation and run the web presentation controller.
     """
@@ -145,21 +143,22 @@ def run(doc, port, usessl):
     oo.check_valid()
     server_address = ("", port)
     httpd = BaseHTTPServer.HTTPServer(server_address, MyHTTPRequestHandler)
-    if usessl is not False:
+    if use_ssl is not False:
         httpd.socket = ssl.wrap_socket(
             httpd.socket,
-            keyfile=usessl[0],
-            certfile=usessl[1],
+            keyfile=use_ssl[0],
+            certfile=use_ssl[1],
             server_side=True)
     httpd.serve_forever()
 
 
 class PresentationController:
     """The OpenOffice mobile presentation controller."""
+    WIN_DETACHED_PROCESS = 0x00000008
 
-    def __init__(self, docfile):
+    def __init__(self, doc_file):
         """Initialize the object."""
-        self.file = docfile
+        self.file = doc_file
         self.port = 2002
         self.bootstrap_context = None
         self.service_manager = None
@@ -257,11 +256,10 @@ class PresentationController:
             from subprocess import Popen
             soffice = os.path.join(
                 os.path.dirname(uno.__file__), "soffice.exe")
-            DETACHED_PROCESS = 0x00000008
             Popen([soffice,
                    "-accept=socket,host=localhost,port=%d;urp;" %
                    self.port],
-                  close_fds=True, creationflags=DETACHED_PROCESS)
+                  close_fds=True, creationflags=self.WIN_DETACHED_PROCESS)
             time.sleep(2)
             return
 
@@ -295,7 +293,8 @@ class PresentationController:
                   file=sys.stderr)
             sys.exit(1)
 
-    def __find_posix_soffice(self):
+    @staticmethod
+    def __find_posix_soffice():
         """Find soffice on POSIX systems (Linux or MacOSX).
 
         Returns:
@@ -310,14 +309,14 @@ class PresentationController:
             return soffice
 
         # Now we have LibreOffice on MacOSX and Linux
-        # OpenOffice/LibreOffice vender installation.
+        # OpenOffice/LibreOffice vendor installation.
 
         # LibreOffice on MacOSX.
         soffice = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
         if os.path.exists(soffice):
             return soffice
 
-        # Linux OpenOffice/LibreOffice vender installation.
+        # Linux OpenOffice/LibreOffice vendor installation.
         soffice = "/usr/bin/soffice"
         if os.path.exists(soffice):
             return soffice
@@ -325,7 +324,8 @@ class PresentationController:
         # Not found
         return None
 
-    def __is_soffice_lo(self, soffice):
+    @staticmethod
+    def __is_soffice_lo(soffice):
         """Check whether the soffice executable is LibreOffice.
 
         LibreOffice on POSIX systems accepts "--accept" instead of
@@ -423,26 +423,26 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
         sys.stderr.write("Please specify the presentation document.\n")
         sys.exit(1)
-    docfile = os.path.abspath(sys.argv[1])
-    s = docfile.lower()
+    doc_file = os.path.abspath(sys.argv[1])
+    s = doc_file.lower()
     if not (s.endswith(".odp")
             or s.endswith(".sxi")
             or s.endswith(".ppt")
             or s.endswith(".pptx")):
-        sys.stderr.write(docfile + ": not a presentation document.\n")
+        sys.stderr.write(doc_file + ": not a presentation document.\n")
         sys.exit(1)
-    if not os.path.exists(docfile):
-        sys.stderr.write(docfile + ": file does not exist.\n")
+    if not os.path.exists(doc_file):
+        sys.stderr.write(doc_file + ": file does not exist.\n")
         sys.exit(1)
-    if not os.path.isfile(docfile):
-        sys.stderr.write(docfile + ": file does not exist.\n")
+    if not os.path.isfile(doc_file):
+        sys.stderr.write(doc_file + ": file does not exist.\n")
         sys.exit(1)
-    mydir = os.path.dirname(os.path.abspath(sys.argv[0]))
-    keyfile = os.path.join(mydir, "server.key.pem")
-    crtfile = os.path.join(mydir, "server.crt.pem")
-    usessl = False
-    if os.path.isfile(keyfile) and os.path.isfile(crtfile):
-        usessl = (keyfile, crtfile)
-    oo = PresentationController(docfile)
+    my_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    key_file = os.path.join(my_dir, "server.key.pem")
+    crt_file = os.path.join(my_dir, "server.crt.pem")
+    use_ssl = False
+    if os.path.isfile(key_file) and os.path.isfile(crt_file):
+        use_ssl = (key_file, crt_file)
+    oo = PresentationController(doc_file)
     run()
     """
